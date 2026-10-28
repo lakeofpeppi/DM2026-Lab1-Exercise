@@ -147,3 +147,177 @@ def test_check_missing_tool_fixture():
     assert res_clean["missing_count"] == 0
     assert res_clean["missing_indices"] == []
     assert res_clean["missing_pct"] == 0.0
+
+
+def test_check_duplicates_tool_fixture():
+    # 1. Fresh session per test function
+    session = SessionState()
+
+    # 2. Load dataset via premade load_dataset_tool
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label",
+    })
+
+    # 3. Instantiate check_duplicates_tool bound to this session
+    data_tools = make_tools(session)
+    check_duplicates_tool = next(t for t in data_tools if t.name == "check_duplicates_tool")
+
+    # --- Test 1: Known Answer #3 (check without dropping) ---
+    res_check = check_duplicates_tool.invoke({"drop": False})
+    assert res_check["n_documents"] == 8
+    assert res_check["duplicate_count"] == 1
+    assert res_check["duplicate_indices"] == [6]
+    assert res_check["remaining_documents"] == 8
+    assert len(session.dataframe) == 8
+
+    # --- Test 2: Known Answer #3 (drop=True removes all copies via keep=False) ---
+    res_drop = check_duplicates_tool.invoke({"drop": True})
+    assert res_drop["n_documents"] == 8
+    assert res_drop["duplicate_count"] == 1
+    assert res_drop["duplicate_indices"] == [6]
+    assert res_drop["remaining_documents"] == 6
+    assert len(session.dataframe) == 6
+
+    # Verify that BOTH duplicate rows ("always gamma delta", original rows 5 and 6) are completely gone
+    assert "always gamma delta" not in session.dataframe["text"].values
+
+
+def test_sample_data_tool_fixture():
+    # 1. Fresh session per test function
+    session = SessionState()
+
+    # 2. Load dataset via premade load_dataset_tool
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label",
+    })
+
+    # 3. Instantiate sample_data_tool bound to this session
+    data_tools = make_tools(session)
+    sample_data_tool = next(t for t in data_tools if t.name == "sample_data_tool")
+
+    # --- Known Answer #13 ---
+    res_sample = sample_data_tool.invoke({"n": 4, "random_state": 42})
+    assert res_sample["n_documents"] == 8
+    assert res_sample["sample_size"] == 4
+    assert res_sample["sampled_indices"] == [1, 5, 0, 7]
+    assert len(res_sample["sample_rows"]) == 4
+
+
+def test_describe_data_tool_fixture():
+    # 1. Fresh session per test function
+    session = SessionState()
+
+    # 2. Load dataset via premade load_dataset_tool
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label",
+    })
+
+    # 3. Instantiate describe_data_tool bound to this session
+    data_tools = make_tools(session)
+    describe_data_tool = next(t for t in data_tools if t.name == "describe_data_tool")
+
+    # --- Known Answer #18 ---
+    res = describe_data_tool.invoke({})
+
+    assert res["n_documents"] == 8
+
+    # Overall stats assertions
+    overall = res["overall_stats"]
+    assert overall["count"] == 8
+    assert overall["mean"] == pytest.approx(19.875, abs=1e-3)
+    assert overall["50%"] == pytest.approx(20.5, abs=1e-3)
+
+    # Per category stats assertions
+    per_cat = res["per_category_stats"]
+    assert "catA" in per_cat
+    assert "catB" in per_cat
+
+    assert per_cat["catA"]["count"] == 4
+    assert per_cat["catA"]["mean"] == pytest.approx(17.25, abs=1e-3)
+
+    assert per_cat["catB"]["count"] == 4
+    assert per_cat["catB"]["mean"] == pytest.approx(22.5, abs=1e-3)
+
+    # Verify pending figure creation
+    assert session.pending_figure is not None
+
+
+def test_tokenize_tool_fixture():
+    # 1. Fresh session per test function
+    session = SessionState()
+
+    # 2. Load dataset via premade load_dataset_tool
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke({
+        "file_path": "agent_dev/sample_fixture.csv",
+        "text_column": "text",
+        "label_column": "label",
+    })
+
+    # 3. Instantiate tokenize_tool bound to this session
+    data_tools = make_tools(session)
+    tokenize_tool = next(t for t in data_tools if t.name == "tokenize_tool")
+
+    # --- Known Answer #10 from TEST_FIXTURE.md ---
+    res = tokenize_tool.invoke({})
+    assert res["n_documents"] == 8
+
+    expected_tokens = [
+        ["always", "alpha", "alpha", "alpha", "beta"],
+        ["always", "alpha", "alpha", "beta"],
+        ["always", "alpha", "beta"],
+        ["always", "gamma", "gamma", "gamma", "delta"],
+        ["always", "gamma", "gamma", "delta"],
+        ["always", "gamma", "delta"],
+        ["always", "gamma", "delta"],
+        [],
+    ]
+
+    # Verify tokens stored in session
+    assert list(session.dataframe["unigrams"]) == expected_tokens
+    assert session.artifacts["tokens"] == expected_tokens
+    assert res["sample_tokens"] == expected_tokens[:5]
+
+
+def test_list_files_tool_fixture():
+    # 1. Fresh session per test function
+    session = SessionState()
+
+    # 2. Instantiate list_files_tool bound to this session
+    data_tools = make_tools(session)
+    list_files_tool = next(t for t in data_tools if t.name == "list_files_tool")
+
+    # --- Known Answer #11 from TEST_FIXTURE.md ---
+    res = list_files_tool.invoke({"subdirectory": "newdataset"})
+    assert res["directories"] == []
+    assert res["files"] == ["Reddit-stock-sentiment.csv"]
+
+    # --- Test root listing ---
+    res_root = list_files_tool.invoke({"subdirectory": ""})
+    assert "newdataset" in res_root["directories"] or "agent_dev" in res_root["directories"]
+
+    # --- Test Security Checks ---
+    # Absolute path rejection
+    with pytest.raises(ValueError, match="Subdirectory path must be relative"):
+        list_files_tool.invoke({"subdirectory": "/etc"})
+
+    # Path traversal rejection
+    with pytest.raises(ValueError, match="Path traversal outside"):
+        list_files_tool.invoke({"subdirectory": "../.."})
